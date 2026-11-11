@@ -229,6 +229,7 @@ private:
     ggml_backend_buffer_ptr table_stage_buf;
     int32_t *               table_stage = nullptr;
     mutable uint64_t        table_layout_up = UINT64_MAX; // layout_id of the uploaded table
+    mutable uint32_t        table_n_att_up  = 0;         // n_att of the uploaded table
 
     std::vector<int32_t> page_slot; // [n_pages] pool slot, -1 if not resident
     std::vector<int32_t> slot_page; // [n_slots] page, -1 if free

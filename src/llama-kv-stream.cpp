@@ -615,12 +615,12 @@ void llama_kv_stream::set_input_pages(ggml_tensor * dst) const {
     GGML_ASSERT((dst == table_t || dst->view_src == table_t) && dst->type == GGML_TYPE_I32 &&
                dst->ne[1] == (int64_t) layers.size());
 
-    // the device table is current: no page moved since the last upload
-    if (table_layout_up == layout_id) {
+    const uint32_t n_att = (uint32_t) dst->ne[0];
+    // the device table is current: no page moved and the attended set is unchanged since the last upload
+    if (table_layout_up == layout_id && table_n_att_up == n_att) {
         return;
     }
 
-    const uint32_t n_att = (uint32_t) dst->ne[0];
     for (uint32_t p = 0; p < n_pages; ++p) {
         int32_t v;
         if (page_slot[p] >= 0) {
@@ -639,6 +639,7 @@ void llama_kv_stream::set_input_pages(ggml_tensor * dst) const {
     GGML_ASSERT(backend && "llama_kv_stream: no backend for the page table upload");
     ggml_backend_tensor_set_async(backend, table_t, table_stage, 0, ggml_nbytes(table_t));
     table_layout_up = layout_id;
+    table_n_att_up  = n_att;
 }
 
 void llama_kv_stream::set_input_tag(ggml_tensor * dst) const {
