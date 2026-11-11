@@ -42,6 +42,34 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
         throw std::runtime_error("failed to allocate the KV stream host store");
     }
 
+    // page table for the paged attention: the kernels resolve one page per 64-token chunk, so a host table costs a PCIe
+    // read per resolution; it lives on the device and is uploaded from pinned staging when the layout changes
+    {
+        ggml_init_params params = {
+            /*.mem_size   =*/ 2*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        table_ctx.reset(ggml_init(params));
+        table_t = ggml_new_tensor_2d(table_ctx.get(), GGML_TYPE_I32, n_pages, layers.size());
+        ggml_format_name(table_t, "kv_stream_table");
+
+        table_buf.reset(ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(layers[0].k->buffer), no_alloc ? 0 : ggml_nbytes(table_t)));
+        if (!table_buf) {
+            throw std::runtime_error("failed to allocate the KV stream page table");
+        }
+        table_t->buffer = table_buf.get();
+        table_t->data   = ggml_backend_buffer_get_base(table_buf.get());
+        ggml_set_input(table_t); // the per-build graph inputs are views of it
+        ggml_backend_buffer_clear(table_buf.get(), 0xFF); // -1: no pool slot
+
+        table_stage_buf.reset(ggml_backend_buft_alloc_buffer(buft, no_alloc ? 0 : ggml_nbytes(table_t)));
+        table_stage = (int32_t *) ggml_backend_buffer_get_base(table_stage_buf.get());
+        if (table_stage) {
+            memset(table_stage, 0xFF, ggml_nbytes(table_t));
+        }
+    }
+
     // two device slots, each the size of a layer until set_backend knows whether prefill reads the pages in place
     alloc_slots((int64_t) n_pages*page_size, no_alloc);
 
@@ -584,17 +612,33 @@ int64_t llama_kv_stream::row(uint32_t cell) const {
 }
 
 void llama_kv_stream::set_input_pages(ggml_tensor * dst) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    GGML_ASSERT(dst->type == GGML_TYPE_I32 && dst->ne[1] == (int64_t) layers.size());
+    GGML_ASSERT((dst == table_t || dst->view_src == table_t) && dst->type == GGML_TYPE_I32 &&
+               dst->ne[1] == (int64_t) layers.size());
 
-    int32_t * data = (int32_t *) dst->data;
-    for (int64_t p = 0; p < dst->ne[0]; ++p) {
-        GGML_ASSERT(page_slot[p] >= 0 || page_ring[p] >= 0);
-        data[p] = page_slot[p] >= 0 ? page_slot[p] : -1 - page_ring[p];
+    // the device table is current: no page moved since the last upload
+    if (table_layout_up == layout_id) {
+        return;
     }
-    for (int64_t l = 1; l < dst->ne[1]; ++l) {
-        std::copy(data, data + dst->ne[0], data + l*dst->ne[0]);
+
+    const uint32_t n_att = (uint32_t) dst->ne[0];
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        int32_t v;
+        if (page_slot[p] >= 0) {
+            v = page_slot[p];
+        } else if (p < n_att) {
+            GGML_ASSERT(page_ring[p] >= 0);
+            v = -1 - page_ring[p];
+        } else {
+            v = -1; // not attended: the kernels only read the attended pages
+        }
+        for (size_t l = 0; l < layers.size(); ++l) {
+            table_stage[p + l*n_pages] = v;
+        }
     }
+
+    GGML_ASSERT(backend && "llama_kv_stream: no backend for the page table upload");
+    ggml_backend_tensor_set_async(backend, table_t, table_stage, 0, ggml_nbytes(table_t));
+    table_layout_up = layout_id;
 }
 
 void llama_kv_stream::set_input_tag(ggml_tensor * dst) const {

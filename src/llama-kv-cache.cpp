@@ -1627,8 +1627,9 @@ ggml_tensor * llama_kv_cache::build_input_kv_pages(ggml_context * ctx, uint32_t 
         return nullptr;
     }
 
-    ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_kv/llama_kv_stream::page_size, layers.size());
-    ggml_set_input(res);
+    // a view of the stream's device page table (marked as input there; set_input_pages uploads it when the layout changes)
+    ggml_tensor * table = stream->pages_table();
+    ggml_tensor * res   = ggml_view_2d(ctx, table, n_kv/llama_kv_stream::page_size, layers.size(), table->nb[1], 0);
     ggml_set_name(res, "attn_inp_kv_pages");
 
     return res;

@@ -85,7 +85,9 @@ struct pd_sync {
         const uint32_t t = (uint32_t) *tag;
         const uint64_t t0 = wall_clock64();
         while (__hip_atomic_load(ready, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) < t) {
-            __builtin_amdgcn_s_sleep(2);
+            // the flag is in host memory: every poll is a PCIe read, so back off (a 64 us sleep costs nothing against
+            // the millisecond copies waited on) instead of polling at link latency from every waiting block
+            __builtin_amdgcn_s_sleep(15);
             if (wall_clock64() - t0 > PD_SYNC_TIMEOUT) {
                 __builtin_trap();
             }

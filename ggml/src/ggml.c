@@ -5615,7 +5615,9 @@ void ggml_flash_attn_ext_set_pages(
         struct ggml_tensor * ring_k,
         struct ggml_tensor * ring_v) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT(pages->type == GGML_TYPE_I32 && ggml_is_contiguous(pages) && pages->ne[2] == 1 && pages->ne[3] == 1);
+    // the readers index the table as 1D rows with the nb[1] stride (ggml_flash_attn_ext_get_pages), so a view of a
+    // wider table is fine
+    GGML_ASSERT(pages->type == GGML_TYPE_I32 && pages->nb[0] == sizeof(int32_t) && pages->ne[2] == 1 && pages->ne[3] == 1);
     GGML_ASSERT(table >= 0 && table < pages->ne[1]);
     GGML_ASSERT(page_size > 0);
     GGML_ASSERT((ring_k == NULL) == (ring_v == NULL));

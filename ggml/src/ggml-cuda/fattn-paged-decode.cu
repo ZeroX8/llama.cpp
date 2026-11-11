@@ -47,7 +47,7 @@ static bool pd_shapes_ok(int device, const ggml_tensor * dst, int64_t max_nb) {
     if (pages) {
         const ggml_tensor * ring_k = dst->src[GGML_FA_SRC_RING_K];
         const ggml_tensor * ring_v = dst->src[GGML_FA_SRC_RING_V];
-        if (ggml_get_op_params_i32(dst, GGML_FA_PARAM_PAGE_SIZE) != PD_PAGE || !ggml_is_contiguous(pages)) return false;
+        if (ggml_get_op_params_i32(dst, GGML_FA_PARAM_PAGE_SIZE) != PD_PAGE || pages->nb[0] != sizeof(int32_t)) return false;
         if (K->ne[1] % PD_PAGE || pages->ne[0] * PD_PAGE > INT32_MAX) return false;
         // Pool and ring share the row layout.
         if (ring_k && (ring_k->nb[1] != K->nb[1] || ring_k->nb[2] != K->nb[2] ||

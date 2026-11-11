@@ -113,7 +113,12 @@ public:
     // the current ubatch attends pages that stream (its attention waits for the copy engine)
     bool synced() const { return n_streamed > 0; }
 
-    // page table input: I32 [n_kv/page_size, n_layer]; slots of resident pages, -1 - ring index of streamed ones
+    // page table for the paged attention, on the device: I32 [n_pages, n_layer]; the kernels resolve a page per chunk,
+    // so a host table would cost a PCIe read per resolution
+    ggml_tensor * pages_table() const { return table_t; }
+
+    // page table input (a view of pages_table): slots of resident pages, -1 - ring index of streamed ones; uploads the
+    // table when the layout changed since the last upload
     void set_input_pages(ggml_tensor * dst) const;
 
     // step tag input: I32 [1]
@@ -216,6 +221,14 @@ private:
     ggml_context_ptr        slots_ctx;
     ggml_backend_buffer_ptr slots_buf;
     layer                   slots[2] = {};
+
+    // the device page table and its pinned staging copy (set_input_pages)
+    ggml_context_ptr        table_ctx;
+    ggml_backend_buffer_ptr table_buf;
+    ggml_tensor *           table_t = nullptr;
+    ggml_backend_buffer_ptr table_stage_buf;
+    int32_t *               table_stage = nullptr;
+    mutable uint64_t        table_layout_up = UINT64_MAX; // layout_id of the uploaded table
 
     std::vector<int32_t> page_slot; // [n_pages] pool slot, -1 if not resident
     std::vector<int32_t> slot_page; // [n_slots] page, -1 if free
